@@ -10,6 +10,7 @@ use std::usize;
 use std::io::Write;
 use std::fs::File;
 use ordered_float::OrderedFloat;
+use nalgebra::*;
 
 /*
  * Main GA class for Separation behavior (use as a model to structure and write other GA extensions for other GA's)
@@ -27,7 +28,12 @@ pub struct CmaAlgo {
     sizes: Vec<(u16,u16)>,
     trial_seeds: Vec<u64>,
     max_div: u32,
-    random_seed: u32
+    random_seed: u32,
+    step_size: f64,
+    covariance_matrix: Matrix<f64, Dyn, Dyn, VecStorage<f64, Dyn, Dyn>>,
+    p_c: Matrix<f64, Dyn, Dyn, VecStorage<f64, Dyn, Dyn>>,
+    weights: Vec<f64>,
+    mu_eff: f64
 }
 
 impl CmaAlgo {
@@ -102,6 +108,16 @@ impl CmaAlgo {
 
         let genome_cache: HashMap<[[[OrderedFloat<f64>; 4]; 3]; 4], f64> = HashMap::new();
 
+        // Initial CMA-ES values
+        let mut step_size = 1.0;
+        let mut covariance_matrix = DMatrix::from_diagonal_element(CmaAlgo::GENOME_LEN.into(), CmaAlgo::GENOME_LEN.into(), step_size);
+        let mut p_c = DMatrix::from_element(Self::GENOME_LEN.into(), 1, 0.0); //covariance matrix evolution path
+
+        // Constant CMA-ES values
+        let parent_number = 4; // will change
+        let weights: Vec<f64> = vec![0.25, 0.25, 0.25, 0.25]; // will change
+        let mu_eff = 1.0 / (0..parent_number).into_iter().map(|x| weights[x].powf(2.0)).sum::<f64>();
+
         CmaAlgo {
             max_gen,
             elitist_cnt,
@@ -114,7 +130,59 @@ impl CmaAlgo {
             trial_seeds,
             random_seed,
             max_div: ((granularity-1) as u32)*(CmaAlgo::GENOME_LEN as u32),
+            step_size,
+            covariance_matrix,
+            p_c,
+            weights,
+            mu_eff,
+            
         }
+    }
+
+    fn genome_to_column_vector(&self, genome: [[[f64; 4]; 3]; 4]) ->  Matrix<f64, Dyn, Dyn, VecStorage<f64, Dyn, Dyn>> {
+        let mut x: Vec<f64> = vec![];
+        for n in 0_u8..4 {
+            for j in 0_u8..3 {
+                for i in 0_u8..4 {
+                    x.push(genome[n as usize][j as usize][i as usize]);
+                }
+            }
+        }
+        DMatrix::from_row_iterator(CmaAlgo::GENOME_LEN.into(), 1, x.into_iter())
+    }
+
+    fn covariance_matrix_adaptation(&mut self) {
+        let c_one = 2.0 / (Self::GENOME_LEN as f64).powf(2.0); // rank-one update learning rate
+        let c_mu = self.mu_eff / (Self::GENOME_LEN as f64).powf(2.0); // rank-mu update learning rate
+        let c_c = 1.0; // rank-one update cumulation path decay rate (not sure on value)
+
+        // temporary values that will be set elsewhere
+        let vec_pop: Vec<Matrix<f64, Dyn, Dyn, VecStorage<f64, Dyn, Dyn>>> = vec![]; // sorted population values as column vectors
+        //let weights: [f64; self.population.len()] = [0_f64; self.population.len()];
+        //let mu_eff = 2.0;
+        //let step_size = 1.0;
+        let current_mean = DMatrix::from_element(Self::GENOME_LEN.into(), 1, 0.5);
+        let future_mean = DMatrix::from_element(Self::GENOME_LEN.into(), 1, 0.5);
+        let c_m = 1.0; // mean learning rate
+
+        
+        // Update covariance matrix evolution path
+        let evolution_path = (1.0 - c_c) * self.p_c.clone() + (c_c * (2.0 - c_c) * self.mu_eff).sqrt() * ((future_mean.clone() - current_mean.clone()) / (c_m * self.step_size));
+        self.p_c = evolution_path.clone();
+
+        // Calculate new covariance matrix
+        let rank_one_update = evolution_path.clone() * evolution_path.clone().transpose();
+
+        let mut rank_mu_update = DMatrix::from_element(Self::GENOME_LEN.into(), Self::GENOME_LEN.into(), 0.0);
+        for i in 0..self.population.len() {
+            let y = (vec_pop[i].clone() - current_mean.clone()) * (1.0/self.step_size);
+            rank_mu_update += self.weights[i] * y.clone() * y.clone().transpose();
+        }
+
+        let new_covariance_matrix = ((1.0 - c_one - c_mu * self.weights.iter().map(|x| x).sum::<f64>()) * self.covariance_matrix.clone()) + (c_one * rank_one_update)+ (c_mu * rank_mu_update) ;
+        
+        // Update Covariance Matrix
+        self.covariance_matrix = new_covariance_matrix;
     }
 
     // mutate genome based on set mutation rate for every gene of the genome
