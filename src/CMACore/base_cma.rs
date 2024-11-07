@@ -156,6 +156,7 @@ impl CmaAlgo {
         }
     }
 
+    // Takes a genome and returns an equivalent column vector for any matrix multiplication
     fn genome_to_column_vector(&self, genome: [[[f64; 4]; 3]; 4]) ->  Matrix<f64, Dyn, Dyn, VecStorage<f64, Dyn, Dyn>> {
         let mut x: Vec<f64> = vec![];
         for n in 0_u8..4 {
@@ -168,6 +169,12 @@ impl CmaAlgo {
         DMatrix::from_row_iterator(CmaAlgo::GENOME_LEN.into(), 1, x.into_iter())
     }
 
+    /* 
+     * Performs covariance matrix adaptation and returns new covariance matrix
+     * Also updates covariance matrix evolution path
+     * y is a vector containing column vectors, such that y = (x_i:lambda - mean) / step-size
+     * gen is current generation (used for heaviside function)
+     *  */
     fn covariance_matrix_adaptation(&mut self, y: Vec<Matrix<f64, Dyn, Dyn, VecStorage<f64, Dyn, Dyn>>>, gen: u16) -> Matrix<f64, Dyn, Dyn, VecStorage<f64, Dyn, Dyn>> {
         let n = Self::GENOME_LEN as f64;
         // covariance matrix adaptation constants
@@ -186,7 +193,7 @@ impl CmaAlgo {
 
         // Equation 41
         let mut y_w = DMatrix::from_element(Self::GENOME_LEN.into(), 1, 0.0);
-        for i in 0..self.parent_number as usize { //change 4 to reflect parent number
+        for i in 0..self.parent_number as usize {
             y_w += self.weights[i] * y[i].clone();
         } 
 
@@ -195,7 +202,7 @@ impl CmaAlgo {
         let mut matrix_d = DMatrix::from_element(Self::GENOME_LEN.into(), Self::GENOME_LEN.into(), 0.0);
         // D^-1
         for i in 0..Self::GENOME_LEN as usize{
-            matrix_d[(i, i)] = 1.0 / self.covariance_matrix.clone().symmetric_eigen().eigenvalues[i];                                                                                 
+            matrix_d[(i, i)] = 1.0 / self.covariance_matrix.clone().symmetric_eigen().eigenvalues[i].sqrt();                                                                                 
         }
 
         // Equation 45
@@ -612,7 +619,8 @@ impl CmaAlgo {
 
 
         // population as column vectors
-        let mut vec_pop: Vec<Matrix<f64, Dyn, Dyn, VecStorage<f64, Dyn, Dyn>>> = vec![]; //will be changed (needs to be sorted search points x_i:lambda)
+        //will be changed (needs to be sorted search points (x_i:lambda)), currently not sorted
+        let mut vec_pop: Vec<Matrix<f64, Dyn, Dyn, VecStorage<f64, Dyn, Dyn>>> = vec![]; 
         self.population
             .iter()
             .for_each(|(genome)| {
@@ -631,6 +639,13 @@ impl CmaAlgo {
 
         //covariance matrix adaptation
         self.covariance_matrix = self.covariance_matrix_adaptation(y, gen);
+
+        // Matrices for eigendecomposition of C where C = B D^2 B^T
+        //let matrix_b = self.covariance_matrix.clone().symmetric_eigen().eigenvectors;
+        //let mut matrix_d = DMatrix::from_element(Self::GENOME_LEN.into(), Self::GENOME_LEN.into(), 0.0);
+        //for i in 0..Self::GENOME_LEN as usize{
+        //    matrix_d[(i, i)] = self.covariance_matrix.clone().symmetric_eigen().eigenvalues[i].sqrt();                                                                                 
+        //}
 
         //generate new population
         self.generate_new_pop();
