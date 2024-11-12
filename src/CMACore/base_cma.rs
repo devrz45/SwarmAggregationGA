@@ -2,6 +2,7 @@ use crate::SOPSCore::aggregation_cma::SOPSEnvironmentCMA;
 
 use super::Genome;
 use rand::{distributions::Bernoulli, distributions::Uniform, rngs, Rng};
+use rand_distr::{Normal, Distribution};
 use rand_distr::num_traits::abs_sub;
 use rayon::prelude::*;
 use std::collections::HashMap;
@@ -49,6 +50,11 @@ impl CmaAlgo {
     }
 
     #[inline]
+    fn normal0_1() -> Normal<f64>{
+        Normal::new(0.0, 1.0).unwrap()
+    }
+
+    #[inline]
     fn genome_init_rng(granularity: u8) -> Uniform<u8> {
         Uniform::new_inclusive(0, granularity)
     }
@@ -63,9 +69,14 @@ impl CmaAlgo {
         Uniform::new(0, population_size)
     }
 
+    // fn genome_normal_rng(population_size: u16) -> Normal<f64> {
+    //     Normal::new(-)
+    // }
+
     // fn mut_val(&self) -> Normal<f64> {
     //     Normal::new(self.mut_mu, self.mut_sd).unwrap()
     // }
+
     #[inline]
     fn cross_pnt() -> Uniform<u16> {
         Uniform::new_inclusive(0, CmaAlgo::GENOME_LEN-1)
@@ -168,6 +179,41 @@ impl CmaAlgo {
         }
         DMatrix::from_row_iterator(CmaAlgo::GENOME_LEN.into(), 1, x.into_iter())
     }
+    fn sample_new_population(&mut self) -> Matrix<f64, Dyn, Dyn, VecStorage<f64, Dyn, Dyn>> {
+        let mut x = DMatrix::from_element(Self::GENOME_LEN.into(), Self::GENOME_LEN.into(), 0.0);
+        
+        //Creation of a random matrix from a normal distribution
+        let matrix_b = self.covariance_matrix.clone().symmetric_eigen().eigenvectors;
+        let mut matrix_d = DMatrix::from_element(Self::GENOME_LEN.into(), Self::GENOME_LEN.into(), 0.0);
+       
+        for i in 0..Self::GENOME_LEN as usize{
+            matrix_d[(i, i)] = 1.0 / self.covariance_matrix.clone().symmetric_eigen().eigenvalues[i].sqrt();                                                                                 
+        } 
+
+        for k in 1..self.population.len() as usize{
+            // Equation 38 (creating z_k; the normally distributed vector)
+            let mut z_k =  DMatrix::from_element(Self::GENOME_LEN.into(), Self::GENOME_LEN.into(), 0.0);
+            let mut random_column = Vec::new();
+            for _ in 0..Self::GENOME_LEN as usize{
+                random_column.push( CmaAlgo::rng().sample(&CmaAlgo::normal0_1()) );
+            }
+            for i in 0..Self::GENOME_LEN as usize{
+                z_k[(i, k)] = random_column[i];
+            }
+
+            // Equation 39 (creating y_k)
+            let y_k = &matrix_b * &matrix_d * &z_k;
+            let x_k = self.mean.clone() + self.step_size*y_k;
+            
+            // Equation 40 
+            for i in 0..Self::GENOME_LEN as usize{
+                x[(i, k)] = x_k[(i, 0)];
+            }
+        }
+        
+        x 
+    }
+    
 
     /* 
      * Performs covariance matrix adaptation and returns new covariance matrix
