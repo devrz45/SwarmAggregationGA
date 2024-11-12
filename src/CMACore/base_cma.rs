@@ -179,20 +179,20 @@ impl CmaAlgo {
         }
         DMatrix::from_row_iterator(CmaAlgo::GENOME_LEN.into(), 1, x.into_iter())
     }
+
     fn sample_new_population(&mut self) -> Matrix<f64, Dyn, Dyn, VecStorage<f64, Dyn, Dyn>> {
         let mut x = DMatrix::from_element(Self::GENOME_LEN.into(), Self::GENOME_LEN.into(), 0.0);
         
-        //Creation of a random matrix from a normal distribution
+        //covariance decomposition
         let matrix_b = self.covariance_matrix.clone().symmetric_eigen().eigenvectors;
         let mut matrix_d = DMatrix::from_element(Self::GENOME_LEN.into(), Self::GENOME_LEN.into(), 0.0);
-       
         for i in 0..Self::GENOME_LEN as usize{
             matrix_d[(i, i)] = 1.0 / self.covariance_matrix.clone().symmetric_eigen().eigenvalues[i].sqrt();                                                                                 
-        } 
-
+        }
+        
         for k in 1..self.population.len() as usize{
             // Equation 38 (creating z_k; the normally distributed vector)
-            let mut z_k =  DMatrix::from_element(Self::GENOME_LEN.into(), Self::GENOME_LEN.into(), 0.0);
+            let mut z_k =  DMatrix::from_element(Self::GENOME_LEN.into(), 1, 0.0);
             let mut random_column = Vec::new();
             for _ in 0..Self::GENOME_LEN as usize{
                 random_column.push( CmaAlgo::rng().sample(&CmaAlgo::normal0_1()) );
@@ -200,9 +200,12 @@ impl CmaAlgo {
             for i in 0..Self::GENOME_LEN as usize{
                 z_k[(i, k)] = random_column[i];
             }
+            
+            let mut y_k = DMatrix::from_element(Self::GENOME_LEN.into(), 1, 0.0);
 
             // Equation 39 (creating y_k)
             let y_k = &matrix_b * &matrix_d * &z_k;
+
             let x_k = self.mean.clone() + self.step_size*y_k;
             
             // Equation 40 
