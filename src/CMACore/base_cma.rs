@@ -196,8 +196,12 @@ impl CmaAlgo {
 
     fn sample_new_population(&mut self) {
         let mut new_pop: Vec<Genome> = vec![];
+        
+        //print genomes for analysis
+        let best_genome = self.population.iter().max_by(|&g1, &g2| g1.fitness.partial_cmp(&g2.fitness).unwrap()).unwrap();
+        println!("Best Genome -> {best_genome:.5?}");
 
-        // covariance decomposition
+        // Covariance decomposition
         let matrix_b = self.covariance_matrix.clone().symmetric_eigen().eigenvectors;
         let mut matrix_d = DMatrix::from_element(Self::GENOME_LEN.into(), Self::GENOME_LEN.into(), 0.0);
         for i in 0..Self::GENOME_LEN as usize{
