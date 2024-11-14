@@ -712,7 +712,7 @@ impl CmaAlgo {
         //}
 
         //generate new population
-        self.generate_new_pop();
+        self.sample_new_population();
         avg_pop_diversity
     }
 
