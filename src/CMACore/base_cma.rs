@@ -184,10 +184,12 @@ impl CmaAlgo {
     fn column_vector_to_genome(&self, column: Matrix<f64, Dyn, Dyn, VecStorage<f64, Dyn, Dyn>>) -> [[[f64; 4]; 3]; 4] {
         let mut genome: [[[f64; 4]; 3]; 4] = [[[0_f64; 4]; 3]; 4];
         let vector = column.column(0);
+        let mut count = 0;
         for n in 0..4 {
             for i in 0..3 {
                 for j in 0..4 {
-                   genome[n][i][j] = vector[n*i*j];
+                   genome[n][i][j] = vector[count];
+                   count += 1;
                 }
             }
         }
@@ -685,7 +687,6 @@ impl CmaAlgo {
             avg_pop_diversity / (self.max_div as f32)
         );
 
-
         // population as column vectors
         //will be changed (needs to be sorted search points (x_i:lambda)), currently not sorted
         let mut vec_pop: Vec<Matrix<f64, Dyn, Dyn, VecStorage<f64, Dyn, Dyn>>> = vec![]; 
@@ -700,6 +701,10 @@ impl CmaAlgo {
         for i in 0..self.population.len() {
             y.push((vec_pop[i].clone() - self.mean.clone())/self.step_size);
         } 
+        
+//      am i sorting the fitness values?
+//      find the highest fitness values and then put them in array to be used by the weighted mean?
+
 
         //calculate new mean
 
