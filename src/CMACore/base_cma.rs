@@ -207,7 +207,7 @@ impl CmaAlgo {
         let matrix_b = self.covariance_matrix.clone().symmetric_eigen().eigenvectors;
         let mut matrix_d = DMatrix::from_element(Self::GENOME_LEN.into(), Self::GENOME_LEN.into(), 0.0);
         for i in 0..Self::GENOME_LEN as usize{
-            matrix_d[(i, i)] = 1.0 / self.covariance_matrix.clone().symmetric_eigen().eigenvalues[i].sqrt();                                                                                 
+            matrix_d[(i, i)] = self.covariance_matrix.clone().symmetric_eigen().eigenvalues[i].sqrt();                                                                                 
         }
         
         // Sampling process for each new individual in the population
@@ -227,9 +227,15 @@ impl CmaAlgo {
             // x_k is one offspring
             let x_k = self.mean.clone() + self.step_size * y_k;
 
+            // Changing the x_k to be from 0 to 1 (probabilities)
+            let mut x_prob = x_k;
+            for i in 0..Self::GENOME_LEN as usize{
+                x_prob[(i,0)] = 1.0/(1.0 + (-x_prob[(i,0)]).exp());
+            }
+
             // Changing x_k from a column vector into a genome and pushing it into new_pop vector
             new_pop.push( Genome{
-                                string: self.column_vector_to_genome(x_k),
+                                string: self.column_vector_to_genome(x_prob),
                                 fitness: 0.0,
                                 } );
         }
