@@ -141,13 +141,18 @@ impl CmaAlgo {
             let y_k = &matrix_b * &matrix_d * &z_k;
 
             let x_k = mean.clone() + step_size * y_k;
+            
+            let mut x_prob = x_k;
+            for i in 0..Self::GENOME_LEN as usize{
+                x_prob[(i,0)] = 1.0/(1.0 + (-x_prob[(i,0)]).exp());
+            }
 
             let mut genome: [[[f64; 4]; 3]; 4] = [[[0_f64; 4]; 3]; 4];
             let mut count = 0;
             for n in 0_u8..4 {
                 for j in 0_u8..3 {
                     for i in 0_u8..4 {
-                        genome[n as usize][j as usize][i as usize] = x_k[(count, 0)];
+                        genome[n as usize][j as usize][i as usize] = x_prob[(count, 0)];
                         count += 1;
                     }
                 }
