@@ -2,6 +2,7 @@ use crate::SOPSCore::aggregation_cma::SOPSEnvironmentCMA;
 
 use super::Genome;
 use rand::{distributions::Bernoulli, distributions::Uniform, rngs, Rng};
+use rand_distr::{Normal, Distribution};
 use rand_distr::num_traits::abs_sub;
 use rayon::prelude::*;
 use std::collections::HashMap;
@@ -49,6 +50,11 @@ impl CmaAlgo {
     }
 
     #[inline]
+    fn normal0_1() -> Normal<f64>{
+        Normal::new(0.0, 1.0).unwrap()
+    }
+
+    #[inline]
     fn genome_init_rng(granularity: u8) -> Uniform<u8> {
         Uniform::new_inclusive(0, granularity)
     }
@@ -93,21 +99,21 @@ impl CmaAlgo {
     ) -> Self {
         let mut starting_pop: Vec<Genome> = vec![];
 
-        for _ in 0..population_size {
-            //init genome
-            let mut genome: [[[f64; 4]; 3]; 4] = [[[0_f64; 4]; 3]; 4];
-            for n in 0_u8..4 {
-                for j in 0_u8..3 {
-                    for i in 0_u8..4 {
-                        genome[n as usize][j as usize][i as usize] = CmaAlgo::rng().sample(CmaAlgo::genome_init_rng(granularity)) as f64
-                    }
-                }
-            }
-            starting_pop.push(Genome {
-                string: (genome),
-                fitness: (0.0),
-            });
-        }
+        // for _ in 0..population_size {
+        //     //init genome
+        //     let mut genome: [[[f64; 4]; 3]; 4] = [[[0_f64; 4]; 3]; 4];
+        //     for n in 0_u8..4 {
+        //         for j in 0_u8..3 {
+        //             for i in 0_u8..4 {
+        //                 genome[n as usize][j as usize][i as usize] = CmaAlgo::rng().sample(CmaAlgo::genome_init_rng(granularity)) as f64
+        //             }
+        //         }
+        //     }
+        //     starting_pop.push(Genome {
+        //         string: (genome),
+        //         fitness: (0.0),
+        //     });
+        // }
 
         let genome_cache: HashMap<[[[OrderedFloat<f64>; 4]; 3]; 4], f64> = HashMap::new();
 
@@ -117,6 +123,42 @@ impl CmaAlgo {
         let mut p_sigma = DMatrix::from_element(Self::GENOME_LEN.into(), 1, 0.0); //step size evolution path
         let mut covariance_matrix = DMatrix::from_diagonal_element(CmaAlgo::GENOME_LEN.into(), CmaAlgo::GENOME_LEN.into(), 1.0);
         let mut p_c = DMatrix::from_element(Self::GENOME_LEN.into(), 1, 0.0); //covariance matrix evolution path
+
+        // Initialize Population based on sampling for C = I
+        let matrix_b = covariance_matrix.clone().symmetric_eigen().eigenvectors;
+        let mut matrix_d     = DMatrix::from_element(Self::GENOME_LEN.into(), Self::GENOME_LEN.into(), 0.0);
+        for i in 0..Self::GENOME_LEN as usize{
+           matrix_d[(i, i)] = (covariance_matrix.clone().symmetric_eigen().eigenvalues[i] as f64).sqrt();                                                                                 
+        }
+        
+        for _ in 0..population_size {
+        
+            let mut z_k =  DMatrix::from_element(Self::GENOME_LEN.into(), 1, 0.0);
+            for i in 0..Self::GENOME_LEN as usize{
+                z_k[(i, 0)] = CmaAlgo::rng().sample(&CmaAlgo::normal0_1());
+            }
+
+            let y_k = &matrix_b * &matrix_d * &z_k;
+
+            let x_k = mean.clone() + step_size * y_k;
+
+            let mut genome: [[[f64; 4]; 3]; 4] = [[[0_f64; 4]; 3]; 4];
+            let mut count = 0;
+            for n in 0_u8..4 {
+                for j in 0_u8..3 {
+                    for i in 0_u8..4 {
+                        genome[n as usize][j as usize][i as usize] = x_k[(count, 0)];
+                        count += 1;
+                    }
+                }
+            }
+
+            // Changing x_k from a column vector into a genome and pushing it into new_pop vector
+            starting_pop.push( Genome{
+                                string: genome,
+                                fitness: 0.0,
+                                } );
+        }
 
         // Constant CMA-ES values
         let parent_number = population_size/2;
