@@ -203,6 +203,25 @@ impl CmaAlgo {
         let best_genome = self.population.iter().max_by(|&g1, &g2| g1.fitness.partial_cmp(&g2.fitness).unwrap()).unwrap();
         println!("Best Genome -> {best_genome:.5?}");
 
+        // Write all the genomic data to a file
+        {
+            let mut buff: Vec<u8> = Vec::new();
+            for genome in &self.population {
+                for n in 0..4 {
+                    for i in 0..3 {
+                        for j in 0..4 {
+                            //buff.push(genome.string[n][i][j] as u8);
+                            buff.extend(genome.string[n][i][j].to_be_bytes());
+                        }
+                    }
+                }
+                buff.extend(genome.fitness.to_be_bytes());
+            }
+
+            let mut file = File::options().create(true).append(true).open(format!("./output/genomic_data_Agg_{}.log", self.random_seed)).expect("Failed to create genomic data file!");
+            file.write_all(&buff).expect("Failed to append to the genomic data file!");
+        }
+
         // Covariance decomposition
         let matrix_b = self.covariance_matrix.clone().symmetric_eigen().eigenvectors;
         let mut matrix_d = DMatrix::from_element(Self::GENOME_LEN.into(), Self::GENOME_LEN.into(), 0.0);
@@ -225,17 +244,24 @@ impl CmaAlgo {
 
             // Equation 40 
             // x_k is one offspring
-            let x_k = self.mean.clone() + self.step_size * y_k;
+            let x_k = self.mean.clone() + self.step_size * &y_k;
 
-            // Changing the x_k to be from 0 to 1 (probabilities)
-            let mut x_prob = x_k;
+            // clipping
+            let mut x_clip = x_k;
             for i in 0..Self::GENOME_LEN as usize{
-                x_prob[(i,0)] = 1.0/(1.0 + (-x_prob[(i,0)]).exp());
-            }
+                x_clip[(i,0)] = if x_clip[(i,0)] < 0.0 
+                {
+                    0.0
+                }  else if x_clip[(i,0)] > 1.0{
+                    1.0
+                } else {
+                    x_clip[(i,0)]
+                }
+            }   
 
             // Changing x_k from a column vector into a genome and pushing it into new_pop vector
             new_pop.push( Genome{
-                                string: self.column_vector_to_genome(x_prob),
+                                string: self.column_vector_to_genome(x_clip),
                                 fitness: 0.0,
                                 } );
         }
