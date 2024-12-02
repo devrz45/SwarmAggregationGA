@@ -54,6 +54,11 @@ impl CmaAlgo {
     }
 
     #[inline]
+    fn mean_init_rng(low: f32, high: f32) -> Uniform<f64> {
+        Uniform::new_inclusive(low as f64, high as f64)
+    }
+
+    #[inline]
     fn unfrm_100() -> Uniform<u8> {
         Uniform::new_inclusive(1, 100)
     }
@@ -89,7 +94,8 @@ impl CmaAlgo {
         perform_cross: bool,
         sizes: Vec<(u16, u16)>,
         trial_seeds: Vec<u64>,
-        random_seed: u32
+        random_seed: u32,
+        search_interval: Vec<(f32, f32)>
     ) -> Self {
         let mut starting_pop: Vec<Genome> = vec![];
 
@@ -113,7 +119,10 @@ impl CmaAlgo {
 
         // Initial CMA-ES values
         let mut mean = DMatrix::from_element(Self::GENOME_LEN.into(), 1, 0.5);
-        let mut step_size = 1.0;
+        for i in 0..Self::GENOME_LEN.into() {
+            mean[i] = CmaAlgo::rng().sample(CmaAlgo::mean_init_rng(search_interval[0].0, search_interval[0].1)) as f64
+        }
+        let mut step_size: f64 = 0.3 * (search_interval[0].1 - search_interval[0].0) as f64;
         let mut p_sigma = DMatrix::from_element(Self::GENOME_LEN.into(), 1, 0.0); //step size evolution path
         let mut covariance_matrix = DMatrix::from_diagonal_element(CmaAlgo::GENOME_LEN.into(), CmaAlgo::GENOME_LEN.into(), 1.0);
         let mut p_c = DMatrix::from_element(Self::GENOME_LEN.into(), 1, 0.0); //covariance matrix evolution path
@@ -172,6 +181,7 @@ impl CmaAlgo {
             weights,
             parent_number,
             mu_eff,
+            
         }
     }
 
@@ -641,9 +651,11 @@ impl CmaAlgo {
 
         //calculate new mean
         self.mean = self.update_mean(&y);
+        //println!("Mean: {}", self.mean);
 
         //update step-size
         self.step_size = self.update_step_size(&y);
+        //println!("Step Size: {}", self.step_size);
 
         //covariance matrix adaptation
 
