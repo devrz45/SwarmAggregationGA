@@ -60,8 +60,12 @@ impl CmaAlgo {
     }
 
     #[inline]
+
     fn genome_prob_init_rng() -> Uniform<f64> {
         Uniform::new_inclusive(0.0, 1.0)
+    }
+    fn mean_init_rng(low: f32, high: f32) -> Uniform<f64> {
+        Uniform::new_inclusive(low as f64, high as f64)
     }
 
     #[inline]
@@ -105,7 +109,8 @@ impl CmaAlgo {
         perform_cross: bool,
         sizes: Vec<(u16, u16)>,
         trial_seeds: Vec<u64>,
-        random_seed: u32
+        random_seed: u32,
+        search_interval: Vec<(f32, f32)>
     ) -> Self {
         let mut starting_pop: Vec<Genome> = vec![];
 
@@ -129,7 +134,10 @@ impl CmaAlgo {
 
         // Initial CMA-ES values
         let mut mean = DMatrix::from_element(Self::GENOME_LEN.into(), 1, 0.5);
-        let mut step_size = 1.0;
+        for i in 0..Self::GENOME_LEN.into() {
+            mean[i] = CmaAlgo::rng().sample(CmaAlgo::mean_init_rng(search_interval[0].0, search_interval[0].1)) as f64
+        }
+        let mut step_size: f64 = 0.3 * (search_interval[0].1 - search_interval[0].0) as f64;
         let mut p_sigma = DMatrix::from_element(Self::GENOME_LEN.into(), 1, 0.0); //step size evolution path
         let mut covariance_matrix = DMatrix::from_diagonal_element(CmaAlgo::GENOME_LEN.into(), CmaAlgo::GENOME_LEN.into(), 1.0);
         let mut p_c = DMatrix::from_element(Self::GENOME_LEN.into(), 1, 0.0); //covariance matrix evolution path
@@ -137,16 +145,36 @@ impl CmaAlgo {
         // Constant CMA-ES values
         let parent_number = population_size/2;
 
-        // weights is not fully implemented
-        let mut weights: Vec<f64> = vec![];
-        for i in 1..(population_size+1) {
-            weights.push(((population_size as f64 + 1.0)/2.0).ln() - (i as f64).ln());
+        // Sets up recombination weights
+        // preliminary convex shape
+        let mut preliminary_weights: Vec<f64> = vec![];
+        for i in 1..(population_size + 1) {
+            preliminary_weights.push(((population_size as f64 + 1.0)/2.0).ln() - (i as f64).ln());
         }
 
-        //let mu_eff = 1.0 / (0..parent_number).into_iter().map(|x| {
-        //    weights[x as usize].powf(2.0)
-        //}).sum::<f64>();
-        let mu_eff = (0..parent_number).into_iter().map(|x| weights[x as usize]).sum::<f64>().powf(2.0) / (0..parent_number).into_iter().map(|x| (weights[x as usize]).powf(2.0)).sum::<f64>();
+        // the variance effective selection mass for the mean
+        let mu_eff = (0..parent_number).into_iter().map(|x| preliminary_weights[x as usize]).sum::<f64>().powf(2.0) / (0..parent_number).into_iter().map(|x| (preliminary_weights[x as usize]).powf(2.0)).sum::<f64>();
+        
+        // other values used to set up weights
+        let mu_eff_neg = (0..population_size).into_iter().map(|x| preliminary_weights[x as usize]).sum::<f64>().powf(2.0) / (0..parent_number).into_iter().map(|x| (preliminary_weights[x as usize]).powf(2.0)).sum::<f64>();
+
+        let c_one = 2.0 / ((Self::GENOME_LEN as f64 + 1.3).powf(2.0) + mu_eff); // rank-one update learning rate
+        let c_mu = f64::min(1.0 - c_one, 2.0 * ((0.25 + mu_eff + 1.0/mu_eff - 2.0)/((Self::GENOME_LEN as f64 + 2.0).powf(2.0) + 2.0 * mu_eff/2.0))); // rank-mu update learning rate
+        
+        let alpha_mu = 1.0 + c_one / c_mu;
+        let alpha_mu_eff = 1.0 + 2.0 * mu_eff_neg / (mu_eff + 2.0);
+        let alpha_pos_def = (1.0 - c_one - c_mu) / (Self::GENOME_LEN as f64 * c_mu);
+
+        // setting up recombination weights
+        let mut weights: Vec<f64> = vec![];
+        preliminary_weights.iter().for_each(|weight|{
+            if *weight >= 0.0{
+                weights.push(1.0 / preliminary_weights.iter().filter_map(|x| if *x >= 0.0 {Some(x)} else {None}).sum::<f64>() * weight);
+            }
+            else {
+                weights.push(f64::min(alpha_mu, f64::min(alpha_mu_eff, alpha_pos_def)) / preliminary_weights.iter().filter_map(|x| if *x < 0.0 {Some(x)} else {None}).sum::<f64>().abs() * weight);
+            }
+        });
 
         CmaAlgo {
             max_gen,
@@ -275,6 +303,55 @@ impl CmaAlgo {
 
     }
     
+    /*
+     * Computes and returns updated mean
+     * y is a vector containing column vectors, such that y = (x_i:lambda - mean) / step-size
+     * */
+     fn update_mean(&self, y: &Vec<Matrix<f64, Dyn, Dyn, VecStorage<f64, Dyn, Dyn>>>) -> Matrix<f64, Dyn, Dyn, VecStorage<f64, Dyn, Dyn>>{
+        // Equation 41
+        let mut y_w = DMatrix::from_element(Self::GENOME_LEN.into(), 1, 0.0);
+        for i in 0..self.parent_number as usize {
+            y_w += self.weights[i] * &y[i];
+        } 
+
+        // return updated mean values
+        self.mean.clone() + 1.0 * self.step_size * y_w
+    }
+
+    /*
+     * Computes and returns new step_size
+     * Also updates step size evolution path
+     * y is a vector containing column vectors, such that y = (x_i:lambda - mean) / step-size
+     * */
+     fn update_step_size(&mut self, y: &Vec<Matrix<f64, Dyn, Dyn, VecStorage<f64, Dyn, Dyn>>>) -> f64{
+        let n = Self::GENOME_LEN as f64;
+        // step size constants
+        let c_sigma = (self.mu_eff + 2.0) / (n + self.mu_eff + 5.0);
+        let d_sigma = 1.0 * 2.0 * f64::max(0.0, ((self.mu_eff - 1.0)/(n + 1.0)).sqrt() - 1.0) + c_sigma;
+
+        // Equation 41
+        let mut y_w = DMatrix::from_element(Self::GENOME_LEN.into(), 1, 0.0);
+        for i in 0..self.parent_number as usize {
+            y_w += self.weights[i] * &y[i];
+        } 
+
+        // Matrices to calcuate C^-1/2
+        let matrix_b = self.covariance_matrix.clone().symmetric_eigen().eigenvectors;
+        let mut matrix_d = DMatrix::from_element(Self::GENOME_LEN.into(), Self::GENOME_LEN.into(), 0.0);
+        // D^-1
+        for i in 0..Self::GENOME_LEN as usize{
+            matrix_d[(i, i)] = 1.0 / self.covariance_matrix.clone().symmetric_eigen().eigenvalues[i].sqrt();                                                                                 
+        }
+
+        // update step size evolution path
+        let evolution_path = (1.0 - c_sigma) * self.p_sigma.clone() + (c_sigma * (2.0 - c_sigma) * self.mu_eff).sqrt() * (&matrix_b * &matrix_d * &matrix_b.transpose()) * y_w;
+        self.p_sigma = evolution_path.clone();        
+
+        // compute new step size
+        let step_size = self.step_size * f64::exp((c_sigma / d_sigma) * ((&evolution_path.norm() / ((n).sqrt() * (1.0 - 1.0 / (4.0 * n) + 1.0 / (21.0 * (n).powf(2.0))))) - 1.0));
+       
+        step_size
+    }
 
     /* 
      * Performs covariance matrix adaptation and returns new covariance matrix
@@ -282,7 +359,7 @@ impl CmaAlgo {
      * y is a vector containing column vectors, such that y = (x_i:lambda - mean) / step-size
      * gen is current generation (used for heaviside function)
      *  */
-    fn covariance_matrix_adaptation(&mut self, y: Vec<Matrix<f64, Dyn, Dyn, VecStorage<f64, Dyn, Dyn>>>, gen: u16) -> Matrix<f64, Dyn, Dyn, VecStorage<f64, Dyn, Dyn>> {
+    fn covariance_matrix_adaptation(&mut self, y: &Vec<Matrix<f64, Dyn, Dyn, VecStorage<f64, Dyn, Dyn>>>, gen: u16) -> Matrix<f64, Dyn, Dyn, VecStorage<f64, Dyn, Dyn>> {
         let n = Self::GENOME_LEN as f64;
         // covariance matrix adaptation constants
         let alpha_cov = 2.0;
@@ -301,7 +378,7 @@ impl CmaAlgo {
         // Equation 41
         let mut y_w = DMatrix::from_element(Self::GENOME_LEN.into(), 1, 0.0);
         for i in 0..self.parent_number as usize {
-            y_w += self.weights[i] * y[i].clone();
+            y_w += self.weights[i] * &y[i];
         } 
 
         // Matrices to calcuate C^-1/2
@@ -324,17 +401,17 @@ impl CmaAlgo {
             if self.weights[i] >= 0.0 {
                 covariance_weights.push(self.weights[i]);
             } else {
-                covariance_weights.push(self.weights[i] * n / ((matrix_b.clone() * matrix_d.clone() * matrix_b.clone().transpose()) * y[i].clone()).norm().powf(2.0));
+                covariance_weights.push(self.weights[i] * n / ((&matrix_b * &matrix_d * &matrix_b.transpose()) * &y[i]).norm().powf(2.0));
             }
         }
 
         // Equation 47
         // Calculate new covariance matrix
-        let rank_one_update = evolution_path.clone() * evolution_path.clone().transpose();
+        let rank_one_update = &evolution_path * &evolution_path.transpose();
 
         let mut rank_mu_update = DMatrix::from_element(Self::GENOME_LEN.into(), Self::GENOME_LEN.into(), 0.0);
         for i in 0..self.population.len() {
-            rank_mu_update += covariance_weights[i] * y[i].clone() * y[i].clone().transpose();
+            rank_mu_update += covariance_weights[i] * &y[i] * &y[i].transpose();
         }
 
         let new_covariance_matrix  = ((1.0 + c_one * ((1.0 - h_sigma) * c_c * (2.0 - c_c)) - c_one - c_mu * self.weights.iter().map(|x| x).sum::<f64>()) * self.covariance_matrix.clone()) + (c_one * rank_one_update)+ (c_mu * rank_mu_update) ;
@@ -724,19 +801,23 @@ impl CmaAlgo {
             avg_pop_diversity / (self.max_div as f32)
         );
 
-        // population as column vectors
-        //will be changed (needs to be sorted search points (x_i:lambda)), currently not sorted
+        // population as column vectors (x_i:lambda)
+        // sort genomes by fitness value
+        let mut sorted_pop = self.population.clone();
+        sorted_pop.sort_by(|a, b| (&b.fitness).partial_cmp(&a.fitness).unwrap());
+        // convert sorted genomes to column vectors (creating x_i:lambda)
+
         let mut vec_pop: Vec<Matrix<f64, Dyn, Dyn, VecStorage<f64, Dyn, Dyn>>> = vec![]; 
-        self.population
+        sorted_pop
             .iter()
-            .for_each(|(genome)| {
+            .for_each(|genome| {
                 vec_pop.push(self.genome_to_column_vector(genome.string));
             });
 
         // y_i:lambda not <y>_w
         let mut y = vec![];
         for i in 0..self.population.len() {
-            y.push((vec_pop[i].clone() - self.mean.clone())/self.step_size);
+            y.push((&vec_pop[i] - self.mean.clone())/self.step_size);
         } 
         
 //      am i sorting the fitness values?
@@ -744,11 +825,15 @@ impl CmaAlgo {
 
 
         //calculate new mean
+        self.mean = self.update_mean(&y);
+        //println!("Mean: {}", self.mean);
 
         //update step-size
+        self.step_size = self.update_step_size(&y);
+        //println!("Step Size: {}", self.step_size);
 
         //covariance matrix adaptation
-        self.covariance_matrix = self.covariance_matrix_adaptation(y, gen);
+        self.covariance_matrix = self.covariance_matrix_adaptation(&y, gen);
 
         // Matrices for eigendecomposition of C where C = B D^2 B^T
         //let matrix_b = self.covariance_matrix.clone().symmetric_eigen().eigenvectors;
