@@ -60,6 +60,11 @@ impl CmaAlgo {
     }
 
     #[inline]
+    fn genome_prob_init_rng() -> Uniform<f64> {
+        Uniform::new_inclusive(0.0, 1.0)
+    }
+
+    #[inline]
     fn unfrm_100() -> Uniform<u8> {
         Uniform::new_inclusive(1, 100)
     }
@@ -110,7 +115,7 @@ impl CmaAlgo {
             for n in 0_u8..4 {
                 for j in 0_u8..3 {
                     for i in 0_u8..4 {
-                        genome[n as usize][j as usize][i as usize] = CmaAlgo::rng().sample(CmaAlgo::genome_init_rng(granularity)) as f64
+                        genome[n as usize][j as usize][i as usize] = (CmaAlgo::rng().sample(CmaAlgo::genome_prob_init_rng()) as f64);
                     }
                 }
             }
