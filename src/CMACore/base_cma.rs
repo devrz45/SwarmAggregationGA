@@ -2,6 +2,7 @@ use crate::SOPSCore::aggregation_cma::SOPSEnvironmentCMA;
 
 use super::Genome;
 use rand::{distributions::Bernoulli, distributions::Uniform, rngs, Rng};
+use rand_distr::{Normal, Distribution};
 use rand_distr::num_traits::abs_sub;
 use rayon::prelude::*;
 use std::collections::HashMap;
@@ -49,11 +50,20 @@ impl CmaAlgo {
     }
 
     #[inline]
+    fn normal0_1() -> Normal<f64>{
+        Normal::new(0.0, 1.0).unwrap()
+    }
+
+    #[inline]
     fn genome_init_rng(granularity: u8) -> Uniform<u8> {
         Uniform::new_inclusive(0, granularity)
     }
 
     #[inline]
+
+    fn genome_prob_init_rng() -> Uniform<f64> {
+        Uniform::new_inclusive(0.0, 1.0)
+    }
     fn mean_init_rng(low: f32, high: f32) -> Uniform<f64> {
         Uniform::new_inclusive(low as f64, high as f64)
     }
@@ -68,9 +78,14 @@ impl CmaAlgo {
         Uniform::new(0, population_size)
     }
 
+    // fn genome_normal_rng(population_size: u16) -> Normal<f64> {
+    //     Normal::new(-)
+    // }
+
     // fn mut_val(&self) -> Normal<f64> {
     //     Normal::new(self.mut_mu, self.mut_sd).unwrap()
     // }
+
     #[inline]
     fn cross_pnt() -> Uniform<u16> {
         Uniform::new_inclusive(0, CmaAlgo::GENOME_LEN-1)
@@ -105,7 +120,7 @@ impl CmaAlgo {
             for n in 0_u8..4 {
                 for j in 0_u8..3 {
                     for i in 0_u8..4 {
-                        genome[n as usize][j as usize][i as usize] = CmaAlgo::rng().sample(CmaAlgo::genome_init_rng(granularity)) as f64
+                        genome[n as usize][j as usize][i as usize] = (CmaAlgo::rng().sample(CmaAlgo::genome_prob_init_rng()) as f64);
                     }
                 }
             }
@@ -198,6 +213,96 @@ impl CmaAlgo {
         DMatrix::from_row_iterator(CmaAlgo::GENOME_LEN.into(), 1, x.into_iter())
     }
 
+    // Takes a column vector and returns an equivalent genome
+    fn column_vector_to_genome(&self, column: Matrix<f64, Dyn, Dyn, VecStorage<f64, Dyn, Dyn>>) -> [[[f64; 4]; 3]; 4] {
+        let mut genome: [[[f64; 4]; 3]; 4] = [[[0_f64; 4]; 3]; 4];
+        let vector = column.column(0);
+        let mut count = 0;
+        for n in 0..4 {
+            for i in 0..3 {
+                for j in 0..4 {
+                   genome[n][i][j] = vector[count];
+                   count += 1;
+                }
+            }
+        }
+        genome
+    }
+
+    fn sample_new_population(&mut self) {
+        let mut new_pop: Vec<Genome> = vec![];
+        
+        //print genomes for analysis
+        let best_genome = self.population.iter().max_by(|&g1, &g2| g1.fitness.partial_cmp(&g2.fitness).unwrap()).unwrap();
+        println!("Best Genome -> {best_genome:.5?}");
+
+        // Write all the genomic data to a file
+        {
+            let mut buff: Vec<u8> = Vec::new();
+            for genome in &self.population {
+                for n in 0..4 {
+                    for i in 0..3 {
+                        for j in 0..4 {
+                            //buff.push(genome.string[n][i][j] as u8);
+                            buff.extend(genome.string[n][i][j].to_be_bytes());
+                        }
+                    }
+                }
+                buff.extend(genome.fitness.to_be_bytes());
+            }
+
+            let mut file = File::options().create(true).append(true).open(format!("./output/genomic_data_Agg_{}.log", self.random_seed)).expect("Failed to create genomic data file!");
+            file.write_all(&buff).expect("Failed to append to the genomic data file!");
+        }
+
+        // Covariance decomposition
+        let matrix_b = self.covariance_matrix.clone().symmetric_eigen().eigenvectors;
+        let mut matrix_d = DMatrix::from_element(Self::GENOME_LEN.into(), Self::GENOME_LEN.into(), 0.0);
+        for i in 0..Self::GENOME_LEN as usize{
+            matrix_d[(i, i)] = self.covariance_matrix.clone().symmetric_eigen().eigenvalues[i].sqrt();                                                                                 
+        }
+        
+        // Sampling process for each new individual in the population
+        for _ in 0..self.population.len() as usize{
+            
+            // Equation 38 (creating z_k; the normally distributed vector)
+            // Samples a new column vector from the normal distribution each sample iteration
+            let mut z_k =  DMatrix::from_element(Self::GENOME_LEN.into(), 1, 0.0);
+            for i in 0..Self::GENOME_LEN as usize{
+                z_k[(i, 0)] = CmaAlgo::rng().sample(&CmaAlgo::normal0_1());
+            }
+
+            // Equation 39 (creating y_k)
+            let y_k = &matrix_b * &matrix_d * &z_k;
+
+            // Equation 40 
+            // x_k is one offspring
+            let x_k = self.mean.clone() + self.step_size * &y_k;
+
+            // clipping
+            let mut x_clip = x_k;
+            for i in 0..Self::GENOME_LEN as usize{
+                x_clip[(i,0)] = if x_clip[(i,0)] < 0.0 
+                {
+                    0.0
+                }  else if x_clip[(i,0)] > 1.0{
+                    1.0
+                } else {
+                    x_clip[(i,0)]
+                }
+            }   
+
+            // Changing x_k from a column vector into a genome and pushing it into new_pop vector
+            new_pop.push( Genome{
+                                string: self.column_vector_to_genome(x_clip),
+                                fitness: 0.0,
+                                } );
+        }
+
+        self.population = new_pop;
+
+    }
+    
     /*
      * Computes and returns updated mean
      * y is a vector containing column vectors, such that y = (x_i:lambda - mean) / step-size
@@ -696,12 +801,12 @@ impl CmaAlgo {
             avg_pop_diversity / (self.max_div as f32)
         );
 
-
         // population as column vectors (x_i:lambda)
         // sort genomes by fitness value
         let mut sorted_pop = self.population.clone();
         sorted_pop.sort_by(|a, b| (&b.fitness).partial_cmp(&a.fitness).unwrap());
         // convert sorted genomes to column vectors (creating x_i:lambda)
+
         let mut vec_pop: Vec<Matrix<f64, Dyn, Dyn, VecStorage<f64, Dyn, Dyn>>> = vec![]; 
         sorted_pop
             .iter()
@@ -714,6 +819,10 @@ impl CmaAlgo {
         for i in 0..self.population.len() {
             y.push((&vec_pop[i] - self.mean.clone())/self.step_size);
         } 
+        
+//      am i sorting the fitness values?
+//      find the highest fitness values and then put them in array to be used by the weighted mean?
+
 
         //calculate new mean
         self.mean = self.update_mean(&y);
@@ -734,7 +843,7 @@ impl CmaAlgo {
         //}
 
         //generate new population
-        self.generate_new_pop();
+        self.sample_new_population();
         avg_pop_diversity
     }
 
